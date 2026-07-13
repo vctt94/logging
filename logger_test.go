@@ -214,6 +214,15 @@ func TestConfigurationAndZeroBuffer(t *testing.T) {
 	}
 }
 
+func TestBackendUsesPackageInitializationLogFlags(t *testing.T) {
+	t.Setenv("LOGFLAGS", "longfile,shortfile,UTC,nodatetime")
+
+	b := testBackend(t, LogConfig{})
+	if b.flags != defaultLogFlags {
+		t.Fatalf("flags = %d, want package defaults %d", b.flags, defaultLogFlags)
+	}
+}
+
 func TestConcurrentWritesReadsAndClose(t *testing.T) {
 	b := testBackend(t, LogConfig{MaxBufferLines: 64})
 	var callbacks atomic.Int64

@@ -1,58 +1,65 @@
 package logging
 
 import (
+	"fmt"
 	"os"
-	"os/user"
 	"path/filepath"
-	"runtime"
 	"strings"
 )
 
-// cleanAndExpandPath expands environment variables and an initial ~ or
-// ~username, then cleans the resulting path.
-func cleanAndExpandPath(path string) string {
+// cleanAndExpandPath expands environment variables and an initial tilde for
+// the current user, then cleans the resulting path.
+func cleanAndExpandPath(path string) (string, error) {
+	return cleanAndExpandPathWithHome(path, os.UserHomeDir)
+}
+
+func cleanAndExpandPathWithHome(
+	path string,
+	homeDir func() (string, error),
+) (string, error) {
 	if path == "" {
-		return path
+		return "", nil
 	}
 
-	path = os.ExpandEnv(path)
+	var missingEnv string
+	path = os.Expand(path, func(name string) string {
+		value, ok := os.LookupEnv(name)
+		if (!ok || value == "") && missingEnv == "" {
+			missingEnv = name
+		}
+		return value
+	})
+	if missingEnv != "" {
+		return "", fmt.Errorf(
+			"expand logger path: environment variable %q is unset or empty",
+			missingEnv,
+		)
+	}
+
 	if !strings.HasPrefix(path, "~") {
-		return filepath.Clean(path)
+		return filepath.Clean(path), nil
 	}
 
-	path = path[1:]
-
-	separators := string(os.PathSeparator)
-	if runtime.GOOS == "windows" {
-		separators += "/"
+	remainder := path[1:]
+	if remainder != "" && !os.IsPathSeparator(remainder[0]) {
+		return "", fmt.Errorf(
+			"user-specific home paths are not supported: %q",
+			path,
+		)
 	}
 
-	username := ""
-	if i := strings.IndexAny(path, separators); i >= 0 {
-		username = path[:i]
-		path = path[i:]
+	home, err := homeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve current user home directory: %w", err)
+	}
+	if home == "" {
+		return "", fmt.Errorf(
+			"resolve current user home directory: empty path",
+		)
 	}
 
-	var homeDir string
-
-	var (
-		currentUser *user.User
-		err         error
-	)
-
-	if username == "" {
-		currentUser, err = user.Current()
-	} else {
-		currentUser, err = user.Lookup(username)
+	for len(remainder) > 0 && os.IsPathSeparator(remainder[0]) {
+		remainder = remainder[1:]
 	}
-
-	if err == nil {
-		homeDir = currentUser.HomeDir
-	}
-
-	if homeDir == "" {
-		homeDir = "."
-	}
-
-	return filepath.Join(homeDir, path)
+	return filepath.Clean(filepath.Join(home, remainder)), nil
 }

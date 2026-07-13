@@ -25,6 +25,10 @@ var errMsgRE = regexp.MustCompile(`^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[ERR]
 
 var errBackendClosed = errors.New("logging backend is closed")
 
+// Match decred/slog by capturing LOGFLAGS once during package
+// initialization rather than each time a backend is constructed.
+var defaultLogFlags = logFlagsFromEnvironment()
+
 // LogRecord describes one record emitted by a subsystem logger.
 type LogRecord struct {
 	Timestamp time.Time
@@ -92,11 +96,14 @@ func (b *LogBuffer) LastLogLines(n int) []string {
 
 // LogConfig contains configuration options for the logging system.
 type LogConfig struct {
-	LogFile              string // Path to log file (empty for no log file)
-	DebugLevel           string // Debug level string in format "subsys=level,subsys2=level2"
-	MaxLogFileSizeKB     int    // Rotation threshold; zero defaults to 1024 KB
-	MaxLogFiles          int    // Number of archived log files to keep; must be positive with LogFile
-	MaxBufferLines       int    // Maximum number of log lines to buffer; zero disables buffering
+	LogFile          string // Path to log file (empty for no log file)
+	DebugLevel       string // Debug level string in format "subsys=level,subsys2=level2"
+	MaxLogFileSizeKB int    // Rotation threshold; zero defaults to 1024 KB
+	MaxLogFiles      int    // Number of archived log files to keep; must be positive with LogFile
+	MaxBufferLines   int    // Maximum number of log lines to buffer; zero disables buffering
+	// Callbacks may write additional records through this backend, but must
+	// not call Close. Close is blocking and waits for callback dispatch to
+	// finish.
 	LogCallback          func(string)
 	RecordCallback       func(LogRecord)
 	ErrorCallback        func(string) // Legacy callback for formatted [ERR] messages
@@ -178,12 +185,15 @@ func NewLogBackend(config LogConfig) (*LogBackend, error) {
 		useStdout:       useStdout,
 		stdout:          os.Stdout,
 		stderr:          os.Stderr,
-		flags:           logFlagsFromEnvironment(),
+		flags:           defaultLogFlags,
 	}
 	b.queueCond = sync.NewCond(&b.queueMtx)
 
 	if config.LogFile != "" {
-		logFile := cleanAndExpandPath(config.LogFile)
+		logFile, err := cleanAndExpandPath(config.LogFile)
+		if err != nil {
+			return nil, fmt.Errorf("expand log file path: %w", err)
+		}
 		r, err := newSecureRotator(logFile, int64(maxFileSizeKB)*1024, config.MaxLogFiles)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create file rotator: %w", err)
@@ -400,6 +410,9 @@ func (b *LogBackend) SetLogLevel(s string) error {
 func (b *LogBackend) LastLogLines(n int) []string { return b.logBuffer.LastLogLines(n) }
 
 // Close shuts down the logger and waits for all accepted records and callbacks.
+// Logger calls that begin after shutdown starts are discarded because the
+// slog.Logger interface cannot return an error. Direct Write calls return
+// errBackendClosed. Callbacks must not call Close.
 func (b *LogBackend) Close() error {
 	b.queueMtx.Lock()
 	if b.closed {
