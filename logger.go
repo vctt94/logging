@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/decred/slog"
-	"github.com/vctt94/bisonbotkit/utils"
 )
 
 const (
@@ -184,7 +183,7 @@ func NewLogBackend(config LogConfig) (*LogBackend, error) {
 	b.queueCond = sync.NewCond(&b.queueMtx)
 
 	if config.LogFile != "" {
-		logFile := utils.CleanAndExpandPath(config.LogFile)
+		logFile := cleanAndExpandPath(config.LogFile)
 		r, err := newSecureRotator(logFile, int64(maxFileSizeKB)*1024, config.MaxLogFiles)
 		if err != nil {
 			return nil, fmt.Errorf("failed to create file rotator: %w", err)
